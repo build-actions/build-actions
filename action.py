@@ -286,11 +286,12 @@ def build_step(args):
 
   actions_config = read_json_file(os.path.join(args.build_dir, actions_config_name))
   build_dir = args.build_dir
+  generator = actions_config["build"]["generator"]
   build_type = actions_config["build"]["build_type"]
 
   cmd = ["cmake", "--build", build_dir, "--parallel"]
 
-  if args.generator.startswith("Visual Studio"):
+  if generator.startswith("Visual Studio"):
     cmd.extend(["--config", build_type, "--", "-nologo", "-v:minimal"])
 
   run(cmd)
