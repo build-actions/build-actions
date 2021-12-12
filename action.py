@@ -17,10 +17,8 @@ default_valgrind_arguments = [
   "--track-origins=yes"
 ]
 
-#
 # Utilities
 # ---------
-#
 
 
 def log(message):
@@ -62,10 +60,8 @@ def run(args, cwd=None, env=None, check=True, sudo=False, print_command=True):
   return subprocess.run(args, cwd=cwd, env=env, check=check)
 
 
-#
 # Host OS & Architecture
 # ----------------------
-#
 
 
 host_os = platform.system()
@@ -98,10 +94,8 @@ def normalize_architecture(arch):
   return arch
 
 
-#
 # Prepare & Configure Utilities
 # -----------------------------
-#
 
 
 def normalize_arguments(args):
@@ -117,16 +111,16 @@ def normalize_arguments(args):
       args.generator = "Visual Studio 15 2017"
     elif args.compiler == "vs2019":
       args.generator = "Visual Studio 16 2019"
+    elif args.compiler == "vs2022":
+      args.generator = "Visual Studio 17 2022"
     elif host_os == "Darwin":
       args.generator = "Unix Makefiles"
     else:
       args.generator = "Ninja"
 
 
-#
 # Prepare Step
 # ------------
-#
 
 
 def prepare_step(args):
@@ -182,10 +176,8 @@ def prepare_step(args):
   raise ValueError("Unknown platform: {}".format(host_os))
 
 
-#
 # Configure Step
 # --------------
-#
 
 
 def configure_step(args):
@@ -273,10 +265,8 @@ def configure_step(args):
   write_json_file(os.path.join(build_dir, actions_config_name), actions_config)
 
 
-#
 # Build Step
 # ----------
-#
 
 
 def build_step(args):
@@ -297,10 +287,8 @@ def build_step(args):
   run(cmd)
 
 
-#
 # Test Step
 # ---------
-#
 
 
 def test_step(args):
@@ -357,10 +345,8 @@ def test_step(args):
     exit(1)
 
 
-#
 # Main & Arguments
 # ----------------
-#
 
 
 def create_argument_parser():
