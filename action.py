@@ -94,6 +94,13 @@ def normalize_architecture(arch):
   return arch
 
 
+def scan_build_executable(compiler):
+    if compiler.startswith("clang"):
+      return compiler.replace("clang", "scan-build")
+    else:
+      return "scan-build"
+
+
 # Prepare & Configure Utilities
 # -----------------------------
 
@@ -168,6 +175,12 @@ def prepare_step(args):
     if args.diagnostics == "valgrind":
       apt_packages.append("valgrind")
 
+    if args.diagnostics == "scan-build":
+      if compiler.startswith("clang"):
+        apt_packages.append(compiler.replace("clang", "clang-tools"))
+      else:
+        apt_packages.append("clang-tools")
+
     run(["apt-add-repository", "-y", ubuntu_test_toolchain_ppa], sudo=True)
     run(["apt-get", "update", "-qq"], sudo=True)
     run(["apt-get", "install", "-qq"] + apt_packages, sudo=True)
@@ -210,7 +223,13 @@ def configure_step(args):
   if args.problem_matcher:
     log("::add-matcher::" + os.path.join(build_actions_root, "problem-matcher-{}.json".format(args.problem_matcher)))
 
-  cmd = ["cmake", source_dir, "-G" + generator]
+  cmd = []
+
+  # Support scan-build diagnostics (static analysis).
+  if args.diagnostics == "scan-build":
+    cmd.append(scan_build_executable(compiler))
+
+  cmd.extend(["cmake", source_dir, "-G", generator])
   env = os.environ.copy()
 
   if generator.startswith("Visual Studio"):
@@ -278,8 +297,14 @@ def build_step(args):
   build_dir = args.build_dir
   generator = actions_config["build"]["generator"]
   build_type = actions_config["build"]["build_type"]
+  diagnostics = actions_config["build"]["diagnostics"]
 
-  cmd = ["cmake", "--build", build_dir, "--parallel"]
+  cmd = []
+
+  if diagnostics == "scan-build":
+    cmd.append(scan_build_executable(actions_config["build"]["compiler"]))
+
+  cmd.extend(["cmake", "--build", build_dir, "--parallel"])
 
   if generator.startswith("Visual Studio"):
     cmd.extend(["--config", build_type, "--", "-nologo", "-v:minimal"])
