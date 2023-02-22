@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import argparse
 import json
 import os
@@ -60,6 +62,14 @@ def run(args, cwd=None, env=None, check=True, sudo=False, print_command=True):
   return subprocess.run(args, cwd=cwd, env=env, check=check)
 
 
+def run_test(args):
+  try:
+    subprocess.run(args, check=True)
+    return True
+  except:
+    return False
+
+
 # Host OS & Architecture
 # ----------------------
 
@@ -69,6 +79,7 @@ host_os = platform.system()
 
 architecture_normalize_map = {
   "i386"   : "x86",
+  "amd64"  : "x64",
   "x86_64" : "x64",
   "x86-64" : "x64",
   "arm64"  : "aarch64"
@@ -81,6 +92,17 @@ architecture_vs_platform_map = {
   "arm"    : "ARM",
   "aarch64": "ARM64"
 }
+
+
+def is_root():
+  return os.geteuid() == 0
+
+
+def cpu_count():
+  try:
+    return len(os.sched_getaffinity(0))
+  except:
+    return os.cpu_count()
 
 
 def detect_architecture():
@@ -120,7 +142,7 @@ def normalize_arguments(args):
       args.generator = "Visual Studio 16 2019"
     elif args.compiler == "vs2022":
       args.generator = "Visual Studio 17 2022"
-    elif host_os == "Darwin":
+    elif host_os == "Darwin" or host_os == "FreeBSD" or host_os == "NetBSD" or host_os == "OpenBSD":
       args.generator = "Unix Makefiles"
     else:
       args.generator = "Ninja"
@@ -148,6 +170,41 @@ def prepare_step(args):
     return
 
   if host_os == "Darwin":
+    return
+
+  if host_os == "FreeBSD":
+    packages = []
+
+    if not run_test(["cmake", "--version"]):
+      packages.append("cmake")
+
+    if compiler.startswith("clang"):
+      if not run_test([compiler, "--version"]):
+        if compiler == "clang":
+          if not run_test(["clang", "--version"]):
+            packages.append("llvm")
+        else:
+          if not run_test([compiler, "--version"]):
+            packages.append(compiler.replace("clang-", "llvm"))
+    else:
+      raise ValueError("{} compiler not supported: use clang on this platform".format(compiler))
+
+    run(["pkg", "install", "-y"] + packages, sudo=not is_root())
+    return
+
+  if host_os == "NetBSD" or host_os == "OpenBSD":
+    packages = []
+
+    if not run_test(["cmake", "--version"]):
+      packages.append("cmake")
+
+    if compiler.startswith("clang"):
+      if not run_test([compiler, "--version"]):
+        packages.append(compiler)
+    else:
+      raise ValueError("{} compiler not supported: use clang on this platform".format(compiler))
+
+    run(["pkg_add", "-I"] + packages, sudo=not is_root())
     return
 
   if host_os == "Linux":
@@ -304,7 +361,7 @@ def build_step(args):
   if diagnostics == "scan-build":
     cmd.append(scan_build_executable(actions_config["build"]["compiler"]))
 
-  cmd.extend(["cmake", "--build", build_dir, "--parallel"])
+  cmd.extend(["cmake", "--build", build_dir, "--parallel", str(cpu_count())])
 
   if generator.startswith("Visual Studio"):
     cmd.extend(["--config", build_type, "--", "-nologo", "-v:minimal"])
@@ -378,7 +435,7 @@ def create_argument_parser():
   parser = argparse.ArgumentParser(description="Step runner")
 
   # Step - must be always provided.
-  parser.add_argument("--step", help="Step to execute (prepare|configure|build|test)")
+  parser.add_argument("--step", help="Step to execute (prepare|configure|build|test|all)")
 
   # Environment - Must be provided when invoking both 'prepare' and 'configure' steps.
   parser.add_argument("--config", default=None, help="Path to a JSON configuration.")
@@ -399,29 +456,40 @@ def create_argument_parser():
   return parser
 
 
-def execute_step(args):
-  if args.step == "prepare":
-    prepare_step(args)
-    exit(0)
+def execute_step(step, args):
+  if step == "prepare":
+    return prepare_step(args)
 
-  if args.step == "configure":
-    configure_step(args)
-    exit(0)
+  if step == "configure":
+    return configure_step(args)
 
-  if args.step == "build":
-    build_step(args)
-    exit(0)
+  if step == "build":
+    return build_step(args)
 
-  if args.step == "test":
-    test_step(args)
-    exit(0)
+  if step == "test":
+    return test_step(args)
 
   raise ValueError("Unknown step: {}".format(step))
 
 
 def main():
   args = create_argument_parser().parse_args()
-  execute_step(args)
+
+  if args.step == "all":
+    log("::group::Prepare")
+    execute_step("prepare", args)
+
+    log("::group::Configure")
+    execute_step("configure", args)
+
+    log("::group::Build")
+    execute_step("build", args)
+
+    execute_step("test", args)
+  else:
+    execute_step(args.step, args)
+
+  exit(0)
 
 
 if __name__ == "__main__":
