@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import subprocess
+import time
 
 
 build_actions_root = os.path.abspath(os.path.dirname(os.path.abspath(__file__)))
@@ -18,6 +19,9 @@ default_valgrind_arguments = [
   "--show-reachable=yes",
   "--track-origins=yes"
 ]
+
+# Retry when apt-get fails with the following message (happens on CI occasionally).
+apt_retry_pattern = "Connection timed out"
 
 # Utilities
 # ---------
@@ -52,19 +56,48 @@ def write_json_file(file_name, data):
     json.dump(data, f, indent=2)
 
 
-def run(args, cwd=None, env=None, check=True, sudo=False, print_command=True):
+def run(args, cwd=None, env=None, check=True, sudo=False, print_command=True, retry_pattern=None, retry_count=3):
+  def decode_stdout_stderr(result):
+    out = result.stdout.decode("utf-8")
+    err = result.stderr.decode("utf-8")
+    return (out, err)
+
   if sudo:
     args = ["sudo"] + args
 
   if print_command:
     log(" ".join(args))
 
-  return subprocess.run(args, cwd=cwd, env=env, check=check)
+  retry_count = max(retry_count, 1)
+
+  for i in range(retry_count):
+    try:
+      result = subprocess.run(args, cwd=cwd, env=env, check=check, capture_output=True)
+      out, err = decode_stdout_stderr(result)
+      print(out)
+      print(err)
+      return result
+    except subprocess.CalledProcessError as e:
+      out, err = decode_stdout_stderr(e)
+      should_retry = False
+
+      if retry_pattern:
+        should_retry = retry_pattern in out or retry_pattern in err
+
+      if should_retry and i < retry_count - 1:
+        if print_command:
+          log("Retrying command because of '{}' error".format(retry_pattern))
+        time.sleep(1)
+        continue
+
+      print(out)
+      print(err)
+      raise e
 
 
 def run_test(args):
   try:
-    subprocess.run(args, check=True)
+    subprocess.run(args, check=True, capture_output=True)
     return True
   except:
     return False
@@ -192,7 +225,25 @@ def prepare_step(args):
     run(["pkg", "install", "-y"] + packages, sudo=not is_root())
     return
 
-  if host_os == "NetBSD" or host_os == "OpenBSD":
+  if host_os == "NetBSD":
+    packages = []
+
+    if not run_test(["cmake", "--version"]):
+      packages.append("cmake")
+
+    if compiler.startswith("clang"):
+      if not run_test([compiler, "--version"]):
+        packages.append(compiler)
+    else:
+      raise ValueError("{} compiler not supported: use clang on this platform".format(compiler))
+
+    if os.getenv("CI_NETBSD_USE_PKGIN"):
+      run(["pkgin", "-y", "install"] + packages, sudo=not is_root())
+    else:
+      run(["pkg_add", "-I"] + packages, sudo=not is_root())
+    return
+
+  if host_os == "OpenBSD":
     packages = []
 
     if not run_test(["cmake", "--version"]):
@@ -239,8 +290,8 @@ def prepare_step(args):
         apt_packages.append("clang-tools")
 
     run(["apt-add-repository", "-y", ubuntu_test_toolchain_ppa], sudo=True)
-    run(["apt-get", "update", "-qq"], sudo=True)
-    run(["apt-get", "install", "-qq"] + apt_packages, sudo=True)
+    run(["apt-get", "update", "-qq"], sudo=True, retry_pattern=apt_retry_pattern)
+    run(["apt-get", "install", "-qq"] + apt_packages, sudo=True, retry_pattern=apt_retry_pattern)
     return
 
   raise ValueError("Unknown platform: {}".format(host_os))
