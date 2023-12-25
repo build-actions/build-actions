@@ -1,0 +1,15 @@
+{
+  "problemMatcher": [
+    {
+      "owner": "msan",
+      "pattern": [
+        {
+          "regexp": "^==(\\d+)==(WARNING|ERROR):(.*?)$",
+          "code": 1,
+          "severity": 2,
+          "message": 3
+        }
+      ]
+    }
+  ]
+}

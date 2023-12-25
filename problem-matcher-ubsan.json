@@ -1,0 +1,17 @@
+{
+  "problemMatcher": [
+    {
+      "owner": "ubsan",
+      "pattern": [
+        {
+          "regexp": "^(.*?):(\\d+):(\\d*):?\\s+(?:runtime\\s+)?(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      ]
+    }
+  ]
+}

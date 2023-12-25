@@ -1,7 +1,7 @@
 {
   "problemMatcher": [
     {
-      "owner": "gcc",
+      "owner": "compile-gcc",
       "pattern": [
         {
           "regexp": "^(.*):(\\d+):(\\d+):\\s+(?:fatal\\s+)?(warning|error):\\s+(.*)$",
@@ -14,7 +14,7 @@
       ]
     },
     {
-      "owner": "msvc",
+      "owner": "compile-msvc",
       "pattern": [
         {
           "regexp": "^(.*)\\((\\d+),?(\\d*)\\)\\s*:\\s*(error|warning|message|note) *(\\w\\d+)?:(.*)$",
