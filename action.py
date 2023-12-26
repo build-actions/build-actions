@@ -4,8 +4,11 @@ import argparse
 import json
 import os
 import platform
+import re
 import subprocess
 import time
+import urllib
+import urllib.request
 
 
 build_actions_root = os.path.abspath(os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +20,31 @@ build_actions_root = os.path.abspath(os.path.dirname(os.path.abspath(__file__)))
 
 actions_config_name = "build-action-config.json"
 
+# LLVM provides its own APT repository that offers pre-built LLVM + clang. We have
+# to cherry-pick the versions we want from LLVM APT vs Ubuntu test toolchain PPA.
+apt_llvm_versions = ["16", "17"]
+apt_llvm_repository_url = "https://apt.llvm.org"
+apt_llvm_gpg_file_url = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+
+# Ubuntu offers a PPA test-toolchain, however, it's sometimes few versions behind.
 ubuntu_test_toolchain_ppa = "ppa:ubuntu-toolchain-r/test"
+
+# backward compatibility - use substitution to support old problem matcher names
+problem_matchers_substitution = { "cpp": "compile" }
+
+problem_matchers_metadata = {
+  "compile" : { "scope": "build", "provides": ["compile-gcc", "compile-msvc"] },
+  "asan"    : { "scope": "run"  , "provides": ["asan"] },
+  "msan"    : { "scope": "run"  , "provides": ["msan"] },
+  "ubsan"   : { "scope": "run"  , "provides": ["ubsan"] },
+  "valgrind": { "scope": "run"  , "provides": ["valgrind"] }
+}
+
+default_valgrind_arguments = [
+  "--leak-check=full",
+  "--show-reachable=yes",
+  "--track-origins=yes"
+]
 
 architecture_normalize_map = {
   "i386"   : "x86",
@@ -34,25 +61,6 @@ architecture_vs_platform_map = {
   "aarch64": "ARM64"
 }
 
-# backward compatibility - use substitution to support old problem matcher names
-problem_matchers_substitution = {
- "cpp": "compile"
-}
-
-problem_matchers_metadata = {
-  "compile" : { "scope": "build", "provides": ["compile-gcc", "compile-msvc"] },
-  "asan"    : { "scope": "run"  , "provides": ["asan"] },
-  "msan"    : { "scope": "run"  , "provides": ["msan"] },
-  "ubsan"   : { "scope": "run"  , "provides": ["ubsan"] },
-  "valgrind": { "scope": "run"  , "provides": ["valgrind"] }
-}
-
-default_valgrind_arguments = [
-  "--leak-check=full",
-  "--show-reachable=yes",
-  "--track-origins=yes"
-]
-
 # Retry when apt-get fails with the following message (happens on CI occasionally).
 apt_retry_pattern = "Connection timed out"
 
@@ -64,12 +72,26 @@ apt_retry_pattern = "Connection timed out"
 def log(message):
   print(message, flush=True)
 
-
 def pluralize(s, count):
   if count == 1:
     return s
   return s + "s"
 
+def parse_key_value_data(content):
+  d = {}
+  r = re.compile("^(\\w+)\\s*=\\s*(.*)$")
+
+  for line in content.split("\n"):
+    line = line.strip()
+    m = r.match(line)
+    if m:
+      key = m[1]
+      value = m[2]
+      if value.startswith('"') and value.endswith('"'):
+          value = value[1:len(value)-1]
+      d[key] = value
+
+  return d
 
 def as_list(x):
   if isinstance(x, list):
@@ -79,30 +101,43 @@ def as_list(x):
   else:
     return [x]
 
-
 def read_text_file(file_name):
   with open(file_name, "r", encoding="utf-8") as f:
     return f.read()
-
 
 def read_json_file(file_name):
   with open(file_name, "r", encoding="utf-8") as f:
     return json.load(f)
 
+def write_text_file(file_name, data):
+  with open(file_name, "w", encoding="utf-8") as f:
+    f.write(data)
 
 def write_json_file(file_name, data):
   with open(file_name, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
 
+def download_text_file(url, method="GET", encoding="utf-8"):
+  try:
+    req = urllib.request.Request(url=url, method=method)
+    with urllib.request.urlopen(req) as f:
+      return f.read().decode(encoding)
+  except:
+    return None
 
-def run(args, cwd=None, env=None, check=True, sudo=False, print_command=True, retry_pattern=None, retry_count=3):
+def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_command=True, retry_pattern=None, retry_count=3):
+  encoding = "utf-8"
+
   def decode_stdout_stderr(result):
-    out = result.stdout.decode("utf-8")
-    err = result.stderr.decode("utf-8")
+    out = result.stdout.decode(encoding)
+    err = result.stderr.decode(encoding)
     return (out, err)
 
   if sudo:
     args = ["sudo"] + args
+
+  if input:
+    input = input.encode(encoding)
 
   if print_command:
     log(" ".join(args))
@@ -111,7 +146,7 @@ def run(args, cwd=None, env=None, check=True, sudo=False, print_command=True, re
 
   for i in range(retry_count):
     try:
-      result = subprocess.run(args, cwd=cwd, env=env, check=check, capture_output=True)
+      result = subprocess.run(args, cwd=cwd, env=env, input=input, check=check, capture_output=True)
       out, err = decode_stdout_stderr(result)
       print(out)
       print(err)
@@ -132,7 +167,6 @@ def run(args, cwd=None, env=None, check=True, sudo=False, print_command=True, re
       print(out)
       print(err)
       raise e
-
 
 def run_test(args):
   try:
@@ -172,16 +206,26 @@ def scan_build_executable(compiler):
     else:
       return "scan-build"
 
-def os_release_codename():
-  try:
-    os_release = read_text_file("/etc/os-release")
-    match_key = "VERSION_CODENAME"
-    for line in os_release.split("\n"):
-      line = line.strip()
-      if line.startswith(match_key + "="):
-        return line[len(match_key) + 1:].strip()
-  except:
-    return ""
+def os_release_info():
+  out = {
+    "codename": "",
+    "unstable": False
+  }
+
+  if host_os == "Linux":
+    try:
+      obj = parse_key_value_data(read_text_file("/etc/os-release"))
+
+      for k, v in obj.items():
+        if k == "VERSION_CODENAME":
+          out["codename"] = v
+        if k == "PRETTY_NAME":
+          if v.endswith("/sid") or v.endswith("/testing"):
+            out["unstable"] = True
+    except:
+      pass
+
+  return out
 
 
 # Build Utilities
@@ -224,6 +268,10 @@ def compiler_version(compiler):
     return compiler[6:]
 
   return ""
+
+def match_compiler_versions(compiler, versions):
+  ver = compiler_version(compiler)
+  return ver in versions
 
 def cmake_exists():
   return run_test(["cmake", "--version"])
@@ -328,15 +376,81 @@ def normalize_arguments(args):
 # Prepare Step
 # ------------
 
+# Based on:
+#   - https://stackoverflow.com/questions/68992799/warning-apt-key-is-deprecated-manage-keyring-files-in-trusted-gpg-d-instead
+#
+# Formats the following string:
+#
+# Types: deb
+# URIs: https://example.com/apt
+# Suites: stable
+# Components: main
+# Signed-By:
+#  -----BEGIN PGP PUBLIC KEY BLOCK-----
+#  .
+#  KEY-DATA
+#  -----END PGP PUBLIC KEY BLOCK-----
+def apt_format_sources(types, uri, suites, components, key):
+  s = "Types: {}\nURIs: {}\nSuites: {}\n".format(types, uri, suites)
+  if components:
+    s += "Components: {}\n".format(components)
+  s += "Signed-By:\n"
+  for line in key.split("\n"):
+    if line == "":
+      line = "."
+    s += " " + line + "\n"
+    if line == "-----END PGP PUBLIC KEY BLOCK-----":
+      break
+  return s + "\n"
+
+def apt_add_llvm_toolchain_repository(version):
+  rel_info = os_release_info()
+
+  if rel_info["codename"]:
+    codename = rel_info["codename"]
+    if rel_info["unstable"]:
+      codename = "unstable"
+    log("Detected OS release codename: {} ({} for llvm repository)".format(rel_info["codename"], codename))
+
+    url = "{}/{}".format(apt_llvm_repository_url, codename)
+    log("Verifying whether LLVM provides builds for this OS release (url={})".format(url))
+
+    check = download_text_file(url, method="HEAD", encoding="LATIN-1")
+    if check != None:
+      link_name = ""
+      if codename != "unstable":
+        link_name = "-" + codename
+
+      gpg_data = download_text_file(apt_llvm_gpg_file_url, method="GET", encoding="utf-8")
+
+      sources_data = apt_format_sources(
+        types="deb",
+        uri=url + "/",
+        suites="llvm-toolchain{}-{}".format(link_name, version),
+        components="main",
+        key=gpg_data)
+      log("Writing apt sources file:\n" + sources_data)
+
+      write_text_file("llvm.sources", sources_data)
+      # We need to run this as root as we need to change files in /etc.
+      run(["mv", "llvm.sources", "/etc/apt/sources.list.d/llvm.sources"], sudo=True)
+    else:
+      log("!! Failure !!")
+      raise ValueError("LLVM toolchain doesn't exist on remote")
+  else:
+    raise ValueError("Failed to get a distribution codename, cannot continue")
+
+def apt_add_test_ubuntu_toolchain():
+  run(["add-apt-repository", "-y", ubuntu_test_toolchain_ppa], sudo=True)
 
 def prepare_step(args, print_group):
   """
   Prepare step is responsible for configuring the environment for the
   selected compiler, generator, and diagnostic options.
 
-  NOTE: Prepare is a stateless step. It only configures the environment,
-  but it doesn't create or use build directory. This is the main reason
-  why some parameters must be repeatedly passed to the 'configure' step.
+  NOTE: Prepare only configures the environment, but it doesn't create or use build
+  directory. This is the main reason why some parameters must be repeatedly passed
+  to the 'configure' step.
   """
 
   if print_group:
@@ -430,7 +544,8 @@ def prepare_step(args, print_group):
     else:
       raise ValueError("Invalid compiler: {}".format(compiler))
 
-    if not c_compiler_exists(compiler) or not cpp_compiler_exists(compiler):
+    compiler_exists = c_compiler_exists(compiler) and cpp_compiler_exists(compiler)
+    if not compiler_exists:
       packages.append(compiler_package)
 
     if args.architecture == "x86":
@@ -459,7 +574,12 @@ def prepare_step(args, print_group):
 
     if packages:
       log("Need to install {} packages".format(packages))
-      run(["apt-add-repository", "-y", ubuntu_test_toolchain_ppa], sudo=True)
+
+      if is_compiler_clang(compiler) and not compiler_exists and match_compiler_versions(compiler, apt_llvm_versions):
+        apt_add_llvm_toolchain_repository(compiler_version(compiler))
+      else:
+        apt_add_test_ubuntu_toolchain()
+
       run(["apt-get", "update", "-qq"], sudo=True, retry_pattern=apt_retry_pattern)
       run(["apt-get", "install", "-qq"] + packages, sudo=True, retry_pattern=apt_retry_pattern)
 
