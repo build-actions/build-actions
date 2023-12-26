@@ -27,18 +27,22 @@ apt_llvm_repository_url = "https://apt.llvm.org"
 apt_llvm_gpg_file_url = "https://apt.llvm.org/llvm-snapshot.gpg.key"
 
 # Ubuntu offers a PPA test-toolchain, however, it's sometimes few versions behind.
-ubuntu_test_toolchain_ppa = "ppa:ubuntu-toolchain-r/test"
+apt_ubuntu_test_toolchain_ppa = "ppa:ubuntu-toolchain-r/test"
+
+# Retry when apt-get fails with the following message (happens on CI occasionally).
+apt_retry_pattern = "Connection timed out"
+
+problem_matcher_definitions = {
+  "compile"      : { "scope": "build"  , "provides": ["compile-gcc", "compile-msvc"] },
+  "analyze-build": { "scope": "analyze", "provides": ["analyze-build"] },
+  "asan"         : { "scope": "run"    , "provides": ["asan"] },
+  "msan"         : { "scope": "run"    , "provides": ["msan"] },
+  "ubsan"        : { "scope": "run"    , "provides": ["ubsan"] },
+  "valgrind"     : { "scope": "run"    , "provides": ["valgrind"] }
+}
 
 # backward compatibility - use substitution to support old problem matcher names
-problem_matchers_substitution = { "cpp": "compile" }
-
-problem_matchers_metadata = {
-  "compile" : { "scope": "build", "provides": ["compile-gcc", "compile-msvc"] },
-  "asan"    : { "scope": "run"  , "provides": ["asan"] },
-  "msan"    : { "scope": "run"  , "provides": ["msan"] },
-  "ubsan"   : { "scope": "run"  , "provides": ["ubsan"] },
-  "valgrind": { "scope": "run"  , "provides": ["valgrind"] }
-}
+problem_matcher_substitutions = { "cpp": "compile" }
 
 default_valgrind_arguments = [
   "--leak-check=full",
@@ -60,17 +64,22 @@ architecture_vs_platform_map = {
   "arm"    : "ARM",
   "aarch64": "ARM64"
 }
-
-# Retry when apt-get fails with the following message (happens on CI occasionally).
-apt_retry_pattern = "Connection timed out"
-
-
 # Common Utilities
 # ----------------
 
 
+log_options = { "groups": False }
+
 def log(message):
   print(message, flush=True)
+
+def begin_group(group):
+  if log_options["groups"]:
+    log("::group::" + group)
+
+def end_group(group):
+  if log_options["groups"]:
+    log("::endgroup::")
 
 def pluralize(s, count):
   if count == 1:
@@ -200,12 +209,6 @@ def normalize_architecture(arch):
     return architecture_normalize_map[arch]
   return arch
 
-def scan_build_executable(compiler):
-    if compiler.startswith("clang"):
-      return compiler.replace("clang", "scan-build")
-    else:
-      return "scan-build"
-
 def os_release_info():
   out = {
     "codename": "",
@@ -238,6 +241,19 @@ def is_compiler_gcc(compiler):
 def is_compiler_clang(compiler):
   return compiler.startswith("clang")
 
+def compiler_version(compiler):
+  if compiler.startswith("gcc-"):
+    return compiler[4:]
+
+  if compiler.startswith("clang-"):
+    return compiler[6:]
+
+  return ""
+
+def match_compiler_versions(compiler, versions):
+  ver = compiler_version(compiler)
+  return ver in versions
+
 def c_compiler_executable(compiler):
   if is_compiler_gcc(compiler) or is_compiler_clang(compiler):
     return compiler
@@ -252,26 +268,8 @@ def cpp_compiler_executable(compiler):
   else:
     raise ValueError("Invalid compiler: {}".format(compiler))
 
-def scan_build_executable(compiler):
-  if is_compiler_gcc(compiler):
-    return "scan-build"
-  elif is_compiler_clang(compiler):
-    return compiler.replace("clang", "scan-build")
-  else:
-    raise ValueError("Invalid compiler: {}".format(compiler))
-
-def compiler_version(compiler):
-  if compiler.startswith("gcc-"):
-    return compiler[4:]
-
-  if compiler.startswith("clang-"):
-    return compiler[6:]
-
-  return ""
-
-def match_compiler_versions(compiler, versions):
-  ver = compiler_version(compiler)
-  return ver in versions
+def analyze_build_executable(compiler):
+  return compiler.replace("clang", "analyze-build")
 
 def cmake_exists():
   return run_test(["cmake", "--version"])
@@ -288,8 +286,8 @@ def c_compiler_exists(compiler):
 def cpp_compiler_exists(compiler):
   return run_test([cpp_compiler_executable(compiler), "--version"])
 
-def scan_build_exists(compiler):
-  return run_test([scan_build_executable(compiler), "--help"])
+def analyze_build_exists(compiler):
+  return run_test([analyze_build_executable(compiler), "--help"])
 
 
 # Problem Matcher Utilities
@@ -301,6 +299,9 @@ def process_problem_matchers(problem_matcher, diagnostics):
 
   if problem_matcher == "auto":
     out.append("compile")
+
+    if diagnostics == "analyze-build":
+      out.append("analyze-build")
 
     if diagnostics == "asan":
       out.append("asan")
@@ -315,17 +316,16 @@ def process_problem_matchers(problem_matcher, diagnostics):
       out.append("valgrind")
 
   else:
-    print(problem_matcher)
     for pm in problem_matcher.split(","):
       if pm == "":
         continue
 
       # Substitute first.
-      if pm in problem_matchers_substitution:
-        pm = problem_matchers_substitution[pm]
+      if pm in problem_matcher_substitutions:
+        pm = problem_matcher_substitutions[pm]
 
       # Verify the problem matcher exists.
-      if pm not in problem_matchers_metadata:
+      if pm not in problem_matcher_definitions:
         raise("Problem matcher {} is not provided by build-actions".format(pm))
 
       out.append(pm)
@@ -334,13 +334,13 @@ def process_problem_matchers(problem_matcher, diagnostics):
 
 def begin_problem_matchers(problem_matchers, scope):
   for pm in problem_matchers:
-    info = problem_matchers_metadata[pm]
+    info = problem_matcher_definitions[pm]
     if info["scope"] == scope:
       log("::add-matcher::" + os.path.join(build_actions_root, "problem-matcher-{}.json".format(pm)))
 
 def end_problem_matchers(problem_matchers, scope):
   for pm in problem_matchers:
-    info = problem_matchers_metadata[pm]
+    info = problem_matcher_definitions[pm]
     if info["scope"] == scope:
       for item in info["provides"]:
         log("::remove-matcher owner={}::".format(item))
@@ -355,6 +355,10 @@ def normalize_arguments(args):
     args.architecture = normalize_architecture(args.architecture)
   else:
     args.architecture = detect_architecture()
+
+  # Backwards compatibility - analyze-build used to be scan-build in the past
+  if args.diagnostics == "scan-build":
+    args.diagnostics = "analyze-build"
 
   if not args.generator:
     if args.compiler == "vs2015":
@@ -373,8 +377,9 @@ def normalize_arguments(args):
   args.problem_matcher = process_problem_matchers(args.problem_matcher, args.diagnostics)
 
 
-# Prepare Step
-# ------------
+# APT Utilities
+# -------------
+
 
 # Based on:
 #   - https://stackoverflow.com/questions/68992799/warning-apt-key-is-deprecated-manage-keyring-files-in-trusted-gpg-d-instead
@@ -441,9 +446,13 @@ def apt_add_llvm_toolchain_repository(version):
     raise ValueError("Failed to get a distribution codename, cannot continue")
 
 def apt_add_test_ubuntu_toolchain():
-  run(["add-apt-repository", "-y", ubuntu_test_toolchain_ppa], sudo=True)
+  run(["add-apt-repository", "-y", apt_ubuntu_test_toolchain_ppa], sudo=True)
 
-def prepare_step(args, print_group):
+
+# Prepare Step
+# ------------
+
+def prepare_step(args):
   """
   Prepare step is responsible for configuring the environment for the
   selected compiler, generator, and diagnostic options.
@@ -453,8 +462,7 @@ def prepare_step(args, print_group):
   to the 'configure' step.
   """
 
-  if print_group:
-    log("::group::Prepare")
+  begin_group("Prepare")
 
   compiler = args.compiler
   generator = args.generator
@@ -566,11 +574,10 @@ def prepare_step(args, print_group):
     if args.diagnostics == "valgrind" and not valgrind_exists():
       packages.append("valgrind")
 
-    if args.diagnostics == "scan-build" and not scan_build_exists(compiler):
-      if compiler.startswith("clang"):
-        packages.append(compiler.replace("clang", "clang-tools"))
-      else:
-        packages.append("clang-tools")
+    if args.diagnostics == "analyze-build" and not analyze_build_exists(compiler):
+      if not is_compiler_clang(compiler):
+        raise ValueError("analyze-build can only be used with clang compiler, not {}".format(compiler))
+      packages.append(compiler.replace("clang", "clang-tools"))
 
     if packages:
       log("Need to install {} packages".format(packages))
@@ -586,15 +593,14 @@ def prepare_step(args, print_group):
   else:
     raise ValueError("Unknown platform: {}".format(host_os))
 
-  if print_group:
-    log("::endgroup::")
+  end_group("Prepare")
 
 
 # Configure Step
 # --------------
 
 
-def configure_step(args, print_group):
+def configure_step(args):
   """
   Configure step is responsible for configuring the project by using 'cmake'.
 
@@ -604,8 +610,7 @@ def configure_step(args, print_group):
     - Invoke cmake to configure the build.
   """
 
-  if print_group:
-    log("::group::Configure")
+  begin_group("Configure")
 
   compiler = args.compiler
   generator = args.generator
@@ -623,13 +628,7 @@ def configure_step(args, print_group):
   else:
     actions_config = {}
 
-  cmd = []
-
-  # Support scan-build diagnostics (static analysis).
-  if args.diagnostics == "scan-build":
-    cmd.append(scan_build_executable(compiler))
-
-  cmd.extend(["cmake", source_dir, "-G", generator])
+  cmd = ["cmake", source_dir, "-G", generator]
   env = os.environ.copy()
 
   if generator.startswith("Visual Studio"):
@@ -655,9 +654,11 @@ def configure_step(args, print_group):
     for dd in as_list(diag_config.get("definitions", [])):
       cmd.append("-D" + dd)
 
+  cmd.append("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+
   # Create build directory and invoke cmake.
   os.makedirs(build_dir, exist_ok=True)
-  run(cmd, cwd=build_dir, env=env)
+  run(cmd, cwd=build_dir, env=env, print_command=True)
 
   actions_config["build"] = {
     "build_tool": "cmake",
@@ -673,21 +674,17 @@ def configure_step(args, print_group):
   # Store build configuration for later steps only if cmake succeeded.
   write_json_file(os.path.join(build_dir, actions_config_name), actions_config)
 
-  if print_group:
-    log("::endgroup::")
+  end_group("Configure")
 
 
 # Build Step
 # ----------
 
 
-def build_step(args, print_group):
+def build_step(args):
   """
   Build step is responsible for building a previously configured project.
   """
-
-  if print_group:
-    log("::group::Build")
 
   actions_config = read_json_file(os.path.join(args.build_dir, actions_config_name))
   build_dir = args.build_dir
@@ -695,22 +692,29 @@ def build_step(args, print_group):
   build_type = actions_config["build"]["build_type"]
   diagnostics = actions_config["build"]["diagnostics"]
 
-  cmd = []
+  if diagnostics == "analyze-build":
+    analyze_cmd = [
+      analyze_build_executable(args.compiler),
+      "-v",
+      "--cdb", build_dir + "/" + "compile_commands.json",
+      "--output", "analysis-output"
+    ]
 
-  if diagnostics == "scan-build":
-    cmd.append(scan_build_executable(actions_config["build"]["compiler"]))
+    begin_group("Analysis")
+    begin_problem_matchers(args.problem_matcher, "analyze")
+    run(analyze_cmd)
+    end_problem_matchers(args.problem_matcher, "analyze")
+    end_group("Analysis")
 
-  cmd.extend(["cmake", "--build", build_dir, "--parallel", str(cpu_count())])
-
+  cmd = ["cmake", "--build", build_dir, "--parallel", str(cpu_count())]
   if generator.startswith("Visual Studio"):
     cmd.extend(["--config", build_type, "--", "-nologo", "-v:minimal"])
 
+  begin_group("Build")
   begin_problem_matchers(args.problem_matcher, "build")
   run(cmd)
   end_problem_matchers(args.problem_matcher, "build")
-
-  if print_group:
-    log("::endgroup::")
+  end_group("Build")
 
 
 # Test Step
@@ -746,8 +750,9 @@ def test_step(args):
 
       # Ignore tests, which were not built, because of disabled features.
       if os.path.isfile(executable):
+        group = " ".join(cmd)
         try:
-          log("::group::" + " ".join(cmd))
+          begin_group(group)
           cmd[0] = executable
 
           if actions_config["build"]["diagnostics"] == "valgrind":
@@ -762,7 +767,7 @@ def test_step(args):
           failures.append(app)
           raise
         finally:
-          log("::endgroup::")
+          end_group(group)
       else:
         if test.get("optional", False) != True:
           log("Test {} not found and it's not optional.".format(app))
@@ -789,7 +794,7 @@ def create_argument_parser():
   # Environment - Must be provided when invoking both 'prepare' and 'configure' steps.
   parser.add_argument("--config", default=None, help="Path to a JSON configuration.")
   parser.add_argument("--compiler", default="", help="C++ compiler to use (gcc|gcc-X|clang|clang-X|vs2015-2022)")
-  parser.add_argument("--diagnostics", default="", help="Diagnostics (asan|msan|ubsan|scan-build|valgrind)")
+  parser.add_argument("--diagnostics", default="", help="Diagnostics (analyze-build|asan|msan|ubsan|valgrind)")
   parser.add_argument("--generator", default="", help="CMake generator to use")
   parser.add_argument("--architecture", default="default", help="Target architecture (x86|x64|aarch64)")
 
@@ -804,15 +809,15 @@ def create_argument_parser():
 
   return parser
 
-def execute_step(step, args, print_group):
+def execute_step(step, args):
   if step == "prepare":
-    return prepare_step(args, print_group)
+    return prepare_step(args)
 
   if step == "configure":
-    return configure_step(args, print_group)
+    return configure_step(args)
 
   if step == "build":
-    return build_step(args, print_group)
+    return build_step(args)
 
   if step == "test":
     return test_step(args)
@@ -826,12 +831,13 @@ def main():
   normalize_arguments(args)
 
   if step == "all":
-    execute_step("prepare", args, True)
-    execute_step("configure", args, True)
-    execute_step("build", args, True)
-    execute_step("test", args, True)
+    log_options["groups"] = True
+    execute_step("prepare", args)
+    execute_step("configure", args)
+    execute_step("build", args)
+    execute_step("test", args)
   else:
-    execute_step(step, args, False)
+    execute_step(step, args)
 
   exit(0)
 

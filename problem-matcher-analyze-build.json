@@ -1,0 +1,18 @@
+{
+  "problemMatcher": [
+    {
+      "owner": "analyze-build",
+      "pattern": [
+        {
+          "regexp": "^(analyze-build)(?:-\\d+)?:\\s*\\w+:\\s*(.*?):(\\d+):(\\d*):?\\s+(warning|error):\\s+(.*)$",
+          "code": 1,
+          "file": 2,
+          "line": 3,
+          "column": 4,
+          "severity": 5,
+          "message": 6
+        }
+      ]
+    }
+  ]
+}
