@@ -38,7 +38,7 @@ problem_matcher_definitions = {
   "asan"         : { "scope": "run"    , "provides": ["asan"] },
   "msan"         : { "scope": "run"    , "provides": ["msan"] },
   "ubsan"        : { "scope": "run"    , "provides": ["ubsan"] },
-  "valgrind"     : { "scope": "run"    , "provides": ["valgrind"] }
+  "valgrind"     : { "scope": "run"    , "provides": ["valgrind-commons", "valgrind-memcheck"] }
 }
 
 # backward compatibility - use substitution to support old problem matcher names
