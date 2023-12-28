@@ -1,10 +1,21 @@
 {
   "problemMatcher": [
     {
-      "owner": "valgrind",
+      "owner": "valgrind-commons",
       "pattern": [
         {
           "regexp": "(?<=\\<what\\>)(.*?)(?=\\<\\/what\\>)",
+          "message": 1
+        }
+      ]
+    },
+    {
+      "owner": "valgrind-memcheck",
+      "code": "Leak Summary",
+      "severity": "warning",
+      "pattern": [
+        {
+          "regexp": "^==\\d+==\\s*((?:definitely lost|indirectly lost|possibly lost|still reachable):\\s*[1-9]\\d* bytes in [1-9]\\d* blocks)$",
           "message": 1
         }
       ]
