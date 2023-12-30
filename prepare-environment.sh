@@ -60,4 +60,9 @@ if ! [ -x "$(command -v python3)" ]; then
     fi
     ln -s /usr/pkg/bin/python3.10 $ACTIONS_DIR/python3
   fi
+
+  if [ "$BUILD_HOST_OS" = "Linux" ]; then
+    $SUDO_COMMAND apt-get update
+    $SUDO_COMMAND apt-get install -qq python3
+  fi
 fi

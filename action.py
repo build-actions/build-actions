@@ -38,7 +38,7 @@ problem_matcher_definitions = {
   "asan"         : { "scope": "run"    , "provides": ["asan"] },
   "msan"         : { "scope": "run"    , "provides": ["msan"] },
   "ubsan"        : { "scope": "run"    , "provides": ["ubsan"] },
-  "valgrind"     : { "scope": "run"    , "provides": ["valgrind"] }
+  "valgrind"     : { "scope": "run"    , "provides": ["valgrind-commons", "valgrind-memcheck"] }
 }
 
 # backward compatibility - use substitution to support old problem matcher names
@@ -55,6 +55,9 @@ architecture_normalize_map = {
   "amd64"  : "x64",
   "x86_64" : "x64",
   "x86-64" : "x64",
+  "arm/v6" : "arm",
+  "arm/v7" : "arm",
+  "arm/v8" : "arm",
   "arm64"  : "aarch64"
 }
 
@@ -64,6 +67,8 @@ architecture_vs_platform_map = {
   "arm"    : "ARM",
   "aarch64": "ARM64"
 }
+
+
 # Common Utilities
 # ----------------
 
@@ -134,6 +139,19 @@ def download_text_file(url, method="GET", encoding="utf-8"):
   except:
     return None
 
+globals = {
+  "sudo": None
+}
+
+def has_sudo():
+  if globals["sudo"] is None:
+    try:
+      subprocess.run(["sudo", "--help"], check=True)
+      globals["sudo"] = True
+    except:
+      globals["sudo"] = False
+  return globals["sudo"]
+
 def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_command=True, retry_pattern=None, retry_count=3):
   encoding = "utf-8"
 
@@ -142,7 +160,7 @@ def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_comm
     err = result.stderr.decode(encoding)
     return (out, err)
 
-  if sudo:
+  if sudo and has_sudo():
     args = ["sudo"] + args
 
   if input:
@@ -211,6 +229,8 @@ def normalize_architecture(arch):
 
 def os_release_info():
   out = {
+    "id": "",
+    "name": "",
     "codename": "",
     "unstable": False
   }
@@ -220,9 +240,13 @@ def os_release_info():
       obj = parse_key_value_data(read_text_file("/etc/os-release"))
 
       for k, v in obj.items():
-        if k == "VERSION_CODENAME":
+        if k == "ID":
+          out["id"] = v
+        elif k == "NAME":
+          out["name"] = v
+        elif k == "VERSION_CODENAME":
           out["codename"] = v
-        if k == "PRETTY_NAME":
+        elif k == "PRETTY_NAME":
           if v.endswith("/sid") or v.endswith("/testing"):
             out["unstable"] = True
     except:
@@ -582,9 +606,9 @@ def prepare_step(args):
     if packages:
       log("Need to install {} packages".format(packages))
 
-      if is_compiler_clang(compiler) and not compiler_exists and match_compiler_versions(compiler, apt_llvm_versions):
+      if compiler.startswith("clang-") and not compiler_exists and match_compiler_versions(compiler, apt_llvm_versions):
         apt_add_llvm_toolchain_repository(compiler_version(compiler))
-      else:
+      elif os_release_info()["id"] == "ubuntu":
         apt_add_test_ubuntu_toolchain()
 
       run(["apt-get", "update", "-qq"], sudo=True, retry_pattern=apt_retry_pattern)
