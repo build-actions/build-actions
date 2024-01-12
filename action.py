@@ -146,7 +146,7 @@ globals = {
 def has_sudo():
   if globals["sudo"] is None:
     try:
-      subprocess.run(["sudo", "--help"], check=True)
+      subprocess.run(["sudo", "--version"], check=True)
       globals["sudo"] = True
     except:
       globals["sudo"] = False
