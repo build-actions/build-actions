@@ -30,7 +30,10 @@ apt_llvm_gpg_file_url = "https://apt.llvm.org/llvm-snapshot.gpg.key"
 apt_ubuntu_test_toolchain_ppa = "ppa:ubuntu-toolchain-r/test"
 
 # Retry when apt-get fails with the following message (happens on CI occasionally).
-apt_retry_pattern = "Connection timed out"
+apt_retry_patterns = [
+  "Connection timed out",
+  "Internal Server Error"
+]
 
 problem_matcher_definitions = {
   "compile"      : { "scope": "build"  , "provides": ["compile-gcc", "compile-msvc"] },
@@ -152,7 +155,7 @@ def has_sudo():
       globals["sudo"] = False
   return globals["sudo"]
 
-def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_command=True, retry_pattern=None, retry_count=3):
+def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_command=True, retry_patterns=None, retry_count=3):
   encoding = "utf-8"
 
   def decode_stdout_stderr(result):
@@ -180,14 +183,17 @@ def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_comm
       return result
     except subprocess.CalledProcessError as e:
       out, err = decode_stdout_stderr(e)
-      should_retry = False
+      retry_pattern_matched = None
 
-      if retry_pattern:
-        should_retry = retry_pattern in out or retry_pattern in err
+      if retry_patterns:
+        for retry_pattern in retry_patterns:
+          if retry_pattern in out or retry_pattern in err:
+            retry_pattern_matched = retry_pattern
+            break
 
-      if should_retry and i < retry_count - 1:
+      if retry_pattern_matched and i < retry_count - 1:
         if print_command:
-          log("Retrying command because of '{}' error".format(retry_pattern))
+          log("Retrying command because of '{}' error (retry pattern matched)".format(retry_pattern_matched))
         time.sleep(1)
         continue
 
@@ -611,8 +617,8 @@ def prepare_step(args):
       elif os_release_info()["id"] == "ubuntu":
         apt_add_test_ubuntu_toolchain()
 
-      run(["apt-get", "update", "-qq"], sudo=True, retry_pattern=apt_retry_pattern)
-      run(["apt-get", "install", "-qq"] + packages, sudo=True, retry_pattern=apt_retry_pattern)
+      run(["apt-get", "update", "-qq"], sudo=True, retry_patterns=apt_retry_patterns)
+      run(["apt-get", "install", "-qq"] + packages, sudo=True, retry_patterns=apt_retry_patterns)
 
   else:
     raise ValueError("Unknown platform: {}".format(host_os))
