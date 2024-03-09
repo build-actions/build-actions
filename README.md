@@ -64,7 +64,7 @@ jobs:
 
     steps:
       - name: "Checkout"
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           path: "source"
 
@@ -72,7 +72,7 @@ jobs:
         run: git clone https://github.com/build-actions/build-actions.git build-actions --depth=1
 
       - name: "Python"
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 

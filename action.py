@@ -22,7 +22,7 @@ actions_config_name = "build-action-config.json"
 
 # LLVM provides its own APT repository that offers pre-built LLVM + clang. We have
 # to cherry-pick the versions we want from LLVM APT vs Ubuntu test toolchain PPA.
-apt_llvm_versions = ["16", "17"]
+apt_llvm_versions = ["16", "17", "18"]
 apt_llvm_repository_url = "https://apt.llvm.org"
 apt_llvm_gpg_file_url = "https://apt.llvm.org/llvm-snapshot.gpg.key"
 
