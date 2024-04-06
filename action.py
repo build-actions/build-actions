@@ -32,7 +32,8 @@ apt_ubuntu_test_toolchain_ppa = "ppa:ubuntu-toolchain-r/test"
 # Retry when apt-get fails with the following message (happens on CI occasionally).
 apt_retry_patterns = [
   "Connection timed out",
-  "Internal Server Error"
+  "Internal Server Error",
+  "Gateway Time-out"
 ]
 
 problem_matcher_definitions = {
