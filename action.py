@@ -135,14 +135,19 @@ def write_json_file(file_name, data):
   with open(file_name, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
 
-def download_text_file(url, method="GET", encoding="utf-8"):
-  try:
-    req = urllib.request.Request(url=url, method=method)
-    with urllib.request.urlopen(req) as f:
-      return f.read().decode(encoding)
-  except BaseException as e:
-    log("WARNING: Failed to download a file: {}".format(e))
-    return None
+def download_text_file(url, method="GET", encoding="utf-8", max_attempts=3):
+  for attempt in range(max_attempts):
+    try:
+      req = urllib.request.Request(url=url, method=method)
+      with urllib.request.urlopen(req) as f:
+        return f.read().decode(encoding)
+    except BaseException as e:
+      log("WARNING: Failed to download a file: {}".format(e))
+
+      if attempt < max_attempts - 1:
+        time.sleep(5)
+        continue
+      return None
 
 globals = {
   "sudo": None
@@ -454,13 +459,16 @@ def apt_add_llvm_toolchain_repository(version):
 
     check = download_text_file(url, method="HEAD", encoding="LATIN-1")
     if check == None:
-      log("WARNING: Failed to verify the LLVM toolchain in remote; next operation may fail")
+      log("WARNING: Failed to verify the LLVM toolchain presence (url={})".format(url))
 
     link_name = ""
     if codename != "unstable":
       link_name = "-" + codename
 
     gpg_data = download_text_file(apt_llvm_gpg_file_url, method="GET", encoding="utf-8")
+    if gpg_data == None:
+      log("!! Failure !!")
+      raise ValueError("Failed to load a GPG data (url={})".format(apt_llvm_gpg_file_url))
 
     sources_data = apt_format_sources(
       types="deb",
