@@ -140,7 +140,8 @@ def download_text_file(url, method="GET", encoding="utf-8"):
     req = urllib.request.Request(url=url, method=method)
     with urllib.request.urlopen(req) as f:
       return f.read().decode(encoding)
-  except:
+  except BaseException as e:
+    log("WARNING: Failed to download a file: {}".format(e))
     return None
 
 globals = {
