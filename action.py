@@ -22,7 +22,7 @@ actions_config_name = "build-action-config.json"
 
 # LLVM provides its own APT repository that offers pre-built LLVM + clang. We have
 # to cherry-pick the versions we want from LLVM APT vs Ubuntu test toolchain PPA.
-apt_llvm_versions = ["16", "17", "18"]
+apt_llvm_versions = ["16", "17", "18", "19"]
 apt_llvm_repository_url = "https://apt.llvm.org"
 apt_llvm_gpg_file_url = "https://apt.llvm.org/llvm-snapshot.gpg.key"
 
@@ -452,28 +452,28 @@ def apt_add_llvm_toolchain_repository(version):
     log("Verifying whether LLVM provides builds for this OS release (url={})".format(url))
 
     check = download_text_file(url, method="HEAD", encoding="LATIN-1")
-    if check != None:
-      link_name = ""
-      if codename != "unstable":
-        link_name = "-" + codename
+    if check == None:
+      log("WARNING: Failed to verify the LLVM toolchain in remote; next operation may fail")
 
-      gpg_data = download_text_file(apt_llvm_gpg_file_url, method="GET", encoding="utf-8")
+    link_name = ""
+    if codename != "unstable":
+      link_name = "-" + codename
 
-      sources_data = apt_format_sources(
-        types="deb",
-        uri=url + "/",
-        suites="llvm-toolchain{}-{}".format(link_name, version),
-        components="main",
-        key=gpg_data)
-      log("Writing apt sources file:\n" + sources_data)
+    gpg_data = download_text_file(apt_llvm_gpg_file_url, method="GET", encoding="utf-8")
 
-      write_text_file("llvm.sources", sources_data)
-      # We need to run this as root as we need to change files in /etc.
-      run(["mv", "llvm.sources", "/etc/apt/sources.list.d/llvm.sources"], sudo=True)
-    else:
-      log("!! Failure !!")
-      raise ValueError("LLVM toolchain doesn't exist on remote")
+    sources_data = apt_format_sources(
+      types="deb",
+      uri=url + "/",
+      suites="llvm-toolchain{}-{}".format(link_name, version),
+      components="main",
+      key=gpg_data)
+    log("Writing apt sources file:\n" + sources_data)
+
+    write_text_file("llvm.sources", sources_data)
+    # We need to run this as root as we need to change files in /etc.
+    run(["mv", "llvm.sources", "/etc/apt/sources.list.d/llvm.sources"], sudo=True)
   else:
+    log("!! Failure !!")
     raise ValueError("Failed to get a distribution codename, cannot continue")
 
 def apt_add_test_ubuntu_toolchain():
