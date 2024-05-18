@@ -819,7 +819,7 @@ def test_step(args):
       n = len(failures)
       log("{} {} out of {} failed:".format(n, pluralize("test", n), len(tests)))
       for failure in failures:
-        log("  - {}".join(failure))
+        log("  - {}".format(failure))
       exit(1)
 
 
