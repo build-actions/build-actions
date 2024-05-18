@@ -783,6 +783,7 @@ def test_step(args):
     for test in tests:
       cmd = test["cmd"]
       app = cmd[0]
+      full_cmd = " ".join(cmd)
 
       executable = os.path.abspath(os.path.join(build_dir, app))
       if host_os == "Windows":
@@ -790,9 +791,8 @@ def test_step(args):
 
       # Ignore tests, which were not built, because of disabled features.
       if os.path.isfile(executable):
-        group = " ".join(cmd)
         try:
-          begin_group(group)
+          begin_group(full_cmd)
           cmd[0] = executable
 
           if actions_config["build"]["diagnostics"] == "valgrind":
@@ -802,22 +802,24 @@ def test_step(args):
           out = run(cmd, cwd=build_dir, check=False, print_command=False)
           if out.returncode != 0:
             log("Test returned {}".format(out.returncode))
-            failures.append(app)
+            failures.append(full_cmd)
         except:
-          failures.append(app)
+          failures.append(full_cmd)
           raise
         finally:
-          end_group(group)
+          end_group(full_cmd)
       else:
         if test.get("optional", False) != True:
           log("Test {} not found and it's not optional.".format(app))
-          failures.append(app)
+          failures.append(full_cmd)
 
     end_problem_matchers(args.problem_matcher, "run")
 
     if failures:
       n = len(failures)
-      log("{} {} out of {} failed: {}".format(n, pluralize("test", n), len(tests), ", ".join(failures)))
+      log("{} {} out of {} failed:".format(n, pluralize("test", n), len(tests)))
+      for failure in failures:
+        log("  - {}".join(failure))
       exit(1)
 
 
