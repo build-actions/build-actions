@@ -162,6 +162,15 @@ def has_sudo():
       globals["sudo"] = False
   return globals["sudo"]
 
+def stringify_args(args):
+  processed = []
+  for arg in args:
+    if " " in arg:
+      processed.append('"' + arg + '"')
+    else:
+      processed.append(arg)
+  return " ".join(processed)
+
 def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_command=True, retry_patterns=None, retry_count=3):
   encoding = "utf-8"
 
@@ -177,7 +186,7 @@ def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_comm
     input = input.encode(encoding)
 
   if print_command:
-    log(" ".join(args))
+    log(stringify_args(args))
 
   retry_count = max(retry_count, 1)
 
@@ -388,6 +397,13 @@ def end_problem_matchers(problem_matchers, scope):
 
 
 def normalize_arguments(args):
+  # If config is not provided, try to get it from the standard workflow path.
+  if args.config == None and args.source_dir:
+    default_config_path = os.path.join(args.source_dir, ".github", "workflows", "build-config.json")
+    if os.path.isfile(default_config_path):
+      log("Found a configuration file: {}".format(default_config_path))
+      args.config = default_config_path
+
   if args.architecture:
     args.architecture = normalize_architecture(args.architecture)
   else:
@@ -395,6 +411,7 @@ def normalize_arguments(args):
 
   # Backwards compatibility - analyze-build used to be scan-build in the past
   if args.diagnostics == "scan-build":
+    log("WARNING: 'scan-build' diagnostics option is deprecated, use 'analyze-build' instead")
     args.diagnostics = "analyze-build"
 
   if not args.generator:
@@ -671,6 +688,22 @@ def configure_step(args):
   cmd = ["cmake", source_dir, "-G", generator]
   env = os.environ.copy()
 
+  cmake_c_flags = []
+  cmake_cxx_flags = []
+  cmake_extra_flags = []
+
+  link_flags = []
+
+  if args.build_defs:
+    for build_def in args.build_defs.split(","):
+      flag = "-D" + build_def
+      if build_def == "CMAKE_C_FLAGS":
+        cmake_c_flags.append(flag)
+      elif build_def == "CMAKE_CXX_FLAGS":
+        cmake_cxx_flags.append(flag)
+      else:
+        cmake_extra_flags.append(flag)
+
   if generator.startswith("Visual Studio"):
     cmd.extend(["-A", architecture_vs_platform_map[args.architecture]])
   else:
@@ -678,16 +711,28 @@ def configure_step(args):
     env["CXX"] = cpp_compiler_executable(compiler)
 
     if args.architecture == "x86":
-      env["CFLAGS"] = "-m32"
-      env["CXXFLAGS"] = "-m32"
-      env["LDFLAGS"] = "-m32"
+      cmake_c_flags.append("-m32")
+      cmake_cxx_flags.append("-m32")
+      link_flags.append("-m32")
+
+    if args.diagnostics == "hardened":
+      hardened_flags = ["-fstack-protector-all", "-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=3", "-D_GLIBCXX_ASSERTIONS"]
+      cmake_c_flags.extend(hardened_flags)
+      cmake_cxx_flags.extend(hardened_flags)
+
+    if link_flags:
+      env["LDFLAGS"] = " ".join(link_flags)
 
     if args.build_type:
       cmd.append("-DCMAKE_BUILD_TYPE=" + args.build_type)
 
-  if args.build_defs:
-    for build_def in args.build_defs.split(","):
-      cmd.append("-D" + build_def)
+  if cmake_c_flags:
+    cmd.append("-DCMAKE_C_FLAGS={}".format(" ".join(cmake_c_flags)))
+
+  if cmake_cxx_flags:
+    cmd.append("-DCMAKE_CXX_FLAGS={}".format(" ".join(cmake_cxx_flags)))
+
+  cmd.extend(cmake_extra_flags)
 
   if args.diagnostics:
     diag_config = actions_config.get("diagnostics", {}).get(args.diagnostics, {})
@@ -831,12 +876,12 @@ def create_argument_parser():
   parser = argparse.ArgumentParser(description="Step runner")
 
   # Step - must be always provided.
-  parser.add_argument("--step", help="Step to execute (prepare|configure|build|test|all)")
+  parser.add_argument("--step", default="all", help="Step to execute (prepare|configure|build|test|all)")
 
   # Environment - Must be provided when invoking both 'prepare' and 'configure' steps.
-  parser.add_argument("--config", default=None, help="Path to a JSON configuration.")
+  parser.add_argument("--config", default=None, help="Path to a JSON configuration")
   parser.add_argument("--compiler", default="", help="C++ compiler to use (gcc|gcc-X|clang|clang-X|vs2015-2022)")
-  parser.add_argument("--diagnostics", default="", help="Diagnostics (analyze-build|asan|msan|ubsan|valgrind)")
+  parser.add_argument("--diagnostics", default="", help="Diagnostics (analyze-build|asan|msan|ubsan|hardening|valgrind)")
   parser.add_argument("--generator", default="", help="CMake generator to use")
   parser.add_argument("--architecture", default="default", help="Target architecture (x86|x64|aarch64)")
 
