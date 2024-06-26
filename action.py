@@ -9,7 +9,7 @@ import subprocess
 import time
 import urllib
 import urllib.request
-
+from multiprocessing.pool import ThreadPool
 
 build_actions_root = os.path.abspath(os.path.dirname(os.path.abspath(__file__)))
 
@@ -171,13 +171,13 @@ def stringify_args(args):
       processed.append(arg)
   return " ".join(processed)
 
+def decode_stdout_stderr(result, encoding):
+  out = result.stdout.decode(encoding)
+  err = result.stderr.decode(encoding)
+  return (out, err)
+
 def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_command=True, retry_patterns=None, retry_count=3):
   encoding = "utf-8"
-
-  def decode_stdout_stderr(result):
-    out = result.stdout.decode(encoding)
-    err = result.stderr.decode(encoding)
-    return (out, err)
 
   if sudo and has_sudo():
     args = ["sudo"] + args
@@ -193,12 +193,12 @@ def run(args, cwd=None, env=None, check=True, input=None, sudo=False, print_comm
   for i in range(retry_count):
     try:
       result = subprocess.run(args, cwd=cwd, env=env, input=input, check=check, capture_output=True)
-      out, err = decode_stdout_stderr(result)
+      out, err = decode_stdout_stderr(result, encoding)
       print(out)
       print(err)
       return result
     except subprocess.CalledProcessError as e:
-      out, err = decode_stdout_stderr(e)
+      out, err = decode_stdout_stderr(e, encoding)
       retry_pattern_matched = None
 
       if retry_patterns:
@@ -805,6 +805,25 @@ def build_step(args):
 # Test Step
 # ---------
 
+class TestCase:
+  def __init__(self, id, cmd, cwd=None, failure=None):
+    self.id = id
+    self.cmd = cmd
+    self.cwd = cwd
+    self.failure = failure
+    self.returncode = 0
+    self.stdout = ""
+    self.stderr = ""
+
+  def execute(self):
+    result = subprocess.run(self.cmd, cwd=self.cwd, capture_output=True)
+    out, err = decode_stdout_stderr(result, "utf-8")
+    self.stdout = out
+    self.stderr = err
+    self.returncode = result.returncode
+
+def execute_test(test_case):
+  test_case.execute()
 
 def test_step(args):
   """
@@ -820,52 +839,65 @@ def test_step(args):
     build_dir = os.path.join(build_dir, build_type)
 
   tests = actions_config.get("tests", [])
-  failures = []
 
-  if tests:
-    begin_problem_matchers(args.problem_matcher, "run")
+  if not tests:
+    return
 
-    for test in tests:
-      cmd = test["cmd"]
-      app = cmd[0]
-      full_cmd = " ".join(cmd)
+  begin_problem_matchers(args.problem_matcher, "run")
 
-      executable = os.path.abspath(os.path.join(build_dir, app))
-      if host_os == "Windows":
-        executable += ".exe"
+  pool = ThreadPool()
+  test_cases = []
+  n_failures = 0
 
-      # Ignore tests, which were not built, because of disabled features.
-      if os.path.isfile(executable):
-        try:
-          begin_group(full_cmd)
-          cmd[0] = executable
+  for test in tests:
+    cmd = test["cmd"]
+    app = cmd[0]
+    id = " ".join(cmd)
 
-          if actions_config["build"]["diagnostics"] == "valgrind":
-            valgrind_arguments = actions_config.get("valgrind_arguments", default_valgrind_arguments)
-            cmd = ["valgrind"] + valgrind_arguments + cmd
+    executable = os.path.abspath(os.path.join(build_dir, app))
+    if host_os == "Windows":
+      executable += ".exe"
 
-          out = run(cmd, cwd=build_dir, check=False, print_command=False)
-          if out.returncode != 0:
-            log("Test returned {}".format(out.returncode))
-            failures.append(full_cmd)
-        except:
-          failures.append(full_cmd)
-          raise
-        finally:
-          end_group(full_cmd)
-      else:
-        if test.get("optional", False) != True:
-          log("Test {} not found and it's not optional.".format(app))
-          failures.append(full_cmd)
+    # Ignore tests, which were not built, because of disabled features.
+    if os.path.isfile(executable):
+      cmd[0] = executable
 
-    end_problem_matchers(args.problem_matcher, "run")
+      if actions_config["build"]["diagnostics"] == "valgrind":
+        valgrind_arguments = actions_config.get("valgrind_arguments", default_valgrind_arguments)
+        cmd = ["valgrind"] + valgrind_arguments + cmd
 
-    if failures:
-      n = len(failures)
-      log("{} {} out of {} failed:".format(n, pluralize("test", n), len(tests)))
-      for failure in failures:
-        log("  - {}".format(failure))
-      exit(1)
+      test_case = TestCase(id=id, cmd=cmd, cwd=build_dir)
+      test_cases.append(test_case)
+
+      pool.apply_async(execute_test, args=(test_case,))
+    else:
+      if test.get("optional", False) != True:
+        test_case = TestCase(id=id, cmd=cmd, failure="test not found and not optional".format(app))
+
+  pool.close()
+  pool.join()
+
+  for test_case in test_cases:
+    if test_case.failure:
+      n_failures += 1
+    else:
+      begin_group(test_case.id)
+      log(test_case.stdout)
+      log(test_case.stderr)
+      if test_case.returncode != 0:
+        log("Test returned {}".format(test_case.returncode))
+        test_case.failure = "returned {}".format(test_case.returncode)
+        n_failures += 1
+      end_group(id)
+
+  end_problem_matchers(args.problem_matcher, "run")
+
+  if n_failures > 0:
+    log("{} {} out of {} failed:".format(n_failures, pluralize("test", n_failures), len(test_cases)))
+    for test_case in test_cases:
+      if test_case.failure:
+        log("  - {} ({})".format(test_case.id, test_case.failure))
+    exit(1)
 
 
 # Main & Arguments
@@ -881,7 +913,7 @@ def create_argument_parser():
   # Environment - Must be provided when invoking both 'prepare' and 'configure' steps.
   parser.add_argument("--config", default=None, help="Path to a JSON configuration")
   parser.add_argument("--compiler", default="", help="C++ compiler to use (gcc|gcc-X|clang|clang-X|vs2015-2022)")
-  parser.add_argument("--diagnostics", default="", help="Diagnostics (analyze-build|asan|msan|ubsan|hardening|valgrind)")
+  parser.add_argument("--diagnostics", default="", help="Diagnostics (analyze-build|asan|msan|ubsan|hardened|valgrind)")
   parser.add_argument("--generator", default="", help="CMake generator to use")
   parser.add_argument("--architecture", default="default", help="Target architecture (x86|x64|aarch64)")
 
