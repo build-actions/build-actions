@@ -881,13 +881,19 @@ def test_step(args):
     if test_case.failure:
       n_failures += 1
     else:
-      begin_group(test_case.id)
-      log(test_case.stdout)
-      log(test_case.stderr)
+      id = test_case.id
+      if test_case.returncode != 0:
+        id += " (!!)"
+        n_failures += 1
+        test_case.failure = "returned {}".format(test_case.returncode)
+
+      begin_group(id)
+      if test_case.stdout:
+        log(test_case.stdout)
+      if test_case.stderr:
+        log(test_case.stderr)
       if test_case.returncode != 0:
         log("Test returned {}".format(test_case.returncode))
-        test_case.failure = "returned {}".format(test_case.returncode)
-        n_failures += 1
       end_group(id)
 
   end_problem_matchers(args.problem_matcher, "run")
