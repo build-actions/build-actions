@@ -428,6 +428,8 @@ def normalize_arguments(args):
       args.generator = "Visual Studio 16 2019"
     elif args.compiler == "vs2022":
       args.generator = "Visual Studio 17 2022"
+    elif args.compiler == "vs2026":
+      args.generator = "Visual Studio 18 2026"
     elif host_os == "Darwin" or host_os == "FreeBSD" or host_os == "NetBSD" or host_os == "OpenBSD":
       args.generator = "Unix Makefiles"
     else:
