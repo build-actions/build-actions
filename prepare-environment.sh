@@ -48,7 +48,7 @@ if ! [ -x "$(command -v python3)" ]; then
 
   if [ "$BUILD_HOST_OS" = "OpenBSD" ]; then
     echo "Trying to install 'python3' as it's not installed"
-    $SUDO_COMMAND pkg_add -I python3
+    $SUDO_COMMAND pkg_add -I python%3
   fi
 
   if [ "$BUILD_HOST_OS" = "NetBSD" ]; then
