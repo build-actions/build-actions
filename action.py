@@ -510,7 +510,7 @@ def apt_add_llvm_toolchain_repository(version):
     raise ValueError("Failed to get a distribution codename, cannot continue")
 
 def apt_add_test_ubuntu_toolchain():
-  run(["add-apt-repository", "-y", apt_ubuntu_test_toolchain_ppa], sudo=True)
+  run(["add-apt-repository", "-y", apt_ubuntu_test_toolchain_ppa], retry_patterns=apt_retry_patterns, sudo=True)
 
 
 def list_dpkg_packages():
