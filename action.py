@@ -62,7 +62,8 @@ architecture_normalize_map = {
   "arm/v6" : "arm",
   "arm/v7" : "arm",
   "arm/v8" : "arm",
-  "arm64"  : "aarch64"
+  "arm64"  : "aarch64",
+  "arm64e" : "arm64e"
 }
 
 architecture_vs_platform_map = {
@@ -739,9 +740,16 @@ def configure_step(args):
     env["CXX"] = cpp_compiler_executable(compiler)
 
     if args.architecture == "x86":
-      cmake_c_flags.append("-m32")
-      cmake_cxx_flags.append("-m32")
-      link_flags.append("-m32")
+      m32_flags = ["-m32"]
+      cmake_c_flags.extend(m32_flags)
+      cmake_cxx_flags.extend(m32_flags)
+      link_flags.extend(m32_flags)
+
+    if args.architecture == "arm64e":
+      arm64e_flags = ["-arch", "arm64e"]
+      cmake_c_flags.extend(arm64e_flags)
+      cmake_cxx_flags.extend(arm64e_flags)
+      link_flags.extend(arm64e_flags)
 
     if args.diagnostics == "hardened":
       hardened_flags = ["-fstack-protector-all", "-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=3", "-D_GLIBCXX_ASSERTIONS"]
@@ -949,7 +957,7 @@ def create_argument_parser():
   parser.add_argument("--compiler", default="", help="C++ compiler to use (gcc|gcc-X|clang|clang-X|vs2015-2022)")
   parser.add_argument("--diagnostics", default="", help="Diagnostics (analyze-build|asan|msan|ubsan|hardened|valgrind)")
   parser.add_argument("--generator", default="", help="CMake generator to use")
-  parser.add_argument("--architecture", default="default", help="Target architecture (x86|x64|aarch64)")
+  parser.add_argument("--architecture", default="default", help="Target architecture (x86|x64|aarch64|arm64e)")
 
   # Build options - must be provided when invoking 'configure' step.
   parser.add_argument("--source-dir", default=".", help="Source directory")
